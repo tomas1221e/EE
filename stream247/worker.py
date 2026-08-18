@@ -122,17 +122,29 @@ class StreamWorker(QtCore.QObject):
         """Build the tee slave list for all enabled RTMP/RTMPS destinations."""
         slaves = []
         for destination in self.cfg.enabled_destinations():
-            slaves.append(f"[f=flv:onfail=ignore]{self._escape_tee_url(destination.url())}")
+            # Live FLV/RTMP outputs are non-seekable, so duration/filesize cannot
+            # be finalized like a normal file. Keep each tee slave independent.
+            slaves.append(
+                f"[f=flv:onfail=ignore:flvflags=no_duration_filesize]"
+                f"{self._escape_tee_url(destination.url())}"
+            )
         return "|".join(slaves)
 
     @staticmethod
     def _tee_fifo_options() -> str:
+        # FFmpeg's FIFO defaults to only 60 packets. With multiple RTMPS/TLS
+        # destinations that can fill during connection handshakes or short
+        # network stalls. A larger queue keeps the one encoder independent
+        # from slow destinations while recovery reconnects failed outputs.
         return (
+            "queue_size=4096:"
             "drop_pkts_on_overflow=1:"
             "attempt_recovery=1:"
             "recover_any_error=1:"
             "recovery_wait_time=1:"
-            "restart_with_keyframe=1"
+            "recovery_wait_streamtime=0:"
+            "restart_with_keyframe=1:"
+            "max_recovery_attempts=0"
         )
 
     def _tee_output_args(self) -> List[str]:
